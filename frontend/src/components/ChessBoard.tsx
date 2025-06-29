@@ -3,7 +3,7 @@ import { useState, useMemo } from "react";
 
 const MOVE = "move";
 
-export const ChessBoard = ({ chess, socket, playerColor, moveCount }: {
+export const ChessBoard = ({ chess, socket, moveCount }: {
     chess: Chess;
     socket: WebSocket;
     playerColor: 'white' | 'black' | null;
@@ -11,14 +11,14 @@ export const ChessBoard = ({ chess, socket, playerColor, moveCount }: {
 }) => {
     const [from, setFrom] = useState<null | Square>(null);
 
-    // Calculate valid moves when a piece is selected
+    // Calculate valid moves for UI display only (not for validation)
     const validMoves = useMemo(() => {
         if (!from) return [];
-        if (chess.isGameOver()) return []; // Prevent showing moves after game over
+        // Note: This is for UI display only, server handles all validation
         try {
             return chess.moves({ square: from, verbose: true });
         } catch (error) {
-            console.error("Error calculating moves:", error);
+            console.error("Error calculating moves for UI:", error);
             return [];
         }
     }, [from, chess, moveCount]);
@@ -29,6 +29,7 @@ export const ChessBoard = ({ chess, socket, playerColor, moveCount }: {
         return history.length > 0 ? history[history.length - 1] : null;
     }, [chess, moveCount]);
 
+    //function to apply color to the squares
     const getSquareClass = (squareRepresentation: Square, i: number, j: number) => {
         let baseClass = `w-16 h-16 ${(i+j)%2 === 0 ? 'bg-green-500' : 'bg-slate-500'}`;
         
@@ -42,7 +43,7 @@ export const ChessBoard = ({ chess, socket, playerColor, moveCount }: {
             baseClass += ' ring-2 ring-blue-400 ring-opacity-50';
         }
         
-        // Highlight valid move destinations
+        // Highlight valid move destinations (UI only)
         const validMove = validMoves.find(move => move.to === squareRepresentation);
         if (validMove) {
             const targetPiece = chess.get(squareRepresentation);
@@ -59,63 +60,21 @@ export const ChessBoard = ({ chess, socket, playerColor, moveCount }: {
     };
 
     const handleSquareClick = (squareRepresentation: Square) => {
-        if (chess.isGameOver()) {
-            console.log("Game is over - no more moves allowed");
-            return; // Prevent any action if game is over
-        }
-        
-        // Check if it's the player's turn
-        const currentTurn = chess.turn() === 'w' ? 'white' : 'black';
-        if (playerColor !== currentTurn) {
-            console.log("It's not your turn!");
-            return;
-        }
-
+        // Remove all game logic validation - let server handle everything
         if (!from) {
-            // Selecting a piece
-            const piece = chess.get(squareRepresentation);
-            if (piece && piece.color === chess.turn()) {
-                setFrom(squareRepresentation);
-            }
+            // Selecting a piece - just UI state, no validation needed
+            setFrom(squareRepresentation);
         } else {
-            // Making a move
-            const isValidMove = validMoves.some(move => move.to === squareRepresentation);
+            // Making a move - send to server for all validation
+            socket.send(JSON.stringify({
+                type: MOVE,
+                payload: {
+                    move: { from, to: squareRepresentation }
+                }
+            }));
             
-            if (isValidMove) {
-                // Apply move locally immediately for responsiveness
-                try {
-                    chess.move({ from, to: squareRepresentation });
-                    
-                    // Send move to server
-                    socket.send(JSON.stringify({
-                        type: MOVE,
-                        payload: {
-                            move: {
-                                from,
-                                to: squareRepresentation
-                            }
-                        }
-                    }));
-                    
-                    setFrom(null);
-                    console.log({
-                        from,
-                        to: squareRepresentation
-                    });
-                } catch (error) {
-                    console.error("Error making move:", error);
-                    setFrom(null);
-                }
-            } else {
-                // If clicking on another piece of the same color, select it instead
-                const piece = chess.get(squareRepresentation);
-                if (piece && piece.color === chess.turn()) {
-                    setFrom(squareRepresentation);
-                } else {
-                    // Invalid move, deselect
-                    setFrom(null);
-                }
-            }
+            setFrom(null);
+            console.log("Move sent to server:", { from, to: squareRepresentation });
         }
     };
 

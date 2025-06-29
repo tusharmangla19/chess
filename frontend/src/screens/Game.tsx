@@ -59,7 +59,9 @@ export const Game = () => {
 
     useEffect(() => {
         if (!socket) return;
-        
+ // useEffect sirf ek baar chalke socket.onmessage ko set karta hai.
+// Fir jab bhi server se koi message aata hai, socket.onmessage chalega — useEffect dobara nahi chalega.
+
         socket.onmessage = (event) => {
             try {
                 const message = JSON.parse(event.data);
@@ -91,14 +93,16 @@ export const Game = () => {
                     case MOVE:
                         const move = message.payload.move;
                         try {
-                            // Check if this move is already applied locally
-                            const lastMove = chessRef.current.history({ verbose: true }).pop();
-                            if (!lastMove || lastMove.from !== move.from || lastMove.to !== move.to) {
-                                chessRef.current.move(move);
-                                setMoveCount(prev => prev + 1);
-                            }
+                            // Apply move only after server validation
+                            // This ensures we only show moves that the server has validated
+                            chessRef.current.move(move);
+                            setMoveCount(prev => prev + 1);
+                            console.log("Move applied after server validation:", move);
                         } catch (error) {
-                            console.error("Error applying move:", error);
+                            console.error("Error applying server-validated move:", error);
+                            // This shouldn't happen if server validation is working correctly
+                            setErrorMessage("Error applying move from server");
+                            setTimeout(() => setErrorMessage(null), 3000);
                         }
                         break;
                     case GAME_OVER:

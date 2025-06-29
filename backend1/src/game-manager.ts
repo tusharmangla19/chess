@@ -29,6 +29,9 @@ import {
     GameOverPayload
 } from './types';
 
+// Rate limiting for moves
+const moveRateLimit = new Map<string, number>();
+
 /**
  * Creates initial game state
  */
@@ -225,18 +228,66 @@ export function handleJoinRoom(state: GameState, socket: WebSocket, roomId: stri
  * Handles the MOVE message - processes moves for both multiplayer and single player games
  */
 export function handleMove(state: GameState, socket: WebSocket, move: Move): void {
+    // Rate limiting: prevent moves faster than 1 per second
+    const playerId = socket.toString();
+    const now = Date.now();
+    const lastMove = moveRateLimit.get(playerId) || 0;
+    
+    if (now - lastMove < 1000) {
+        socket.send(JSON.stringify({
+            type: ERROR,
+            payload: { message: "Move too fast. Please wait a moment." }
+        }));
+        return;
+    }
+    
+    moveRateLimit.set(playerId, now);
+    
     // Check multiplayer games first
     let multiplayerGame = state.games.find(game => game.player1 === socket || game.player2 === socket);
     
     if (multiplayerGame) {
-        // Handle multiplayer game
+        // Handle multiplayer game with enhanced validation
         try {
+            // Validate it's the player's turn
+            const currentTurn = multiplayerGame.board.turn() === 'w' ? 'white' : 'black';
+            const playerColor = multiplayerGame.player1 === socket ? 'white' : 'black';
+            
+            if (currentTurn !== playerColor) {
+                socket.send(JSON.stringify({
+                    type: ERROR,
+                    payload: { message: "Not your turn" }
+                }));
+                return;
+            }
+            
+            // Validate the move is legal
+            const legalMoves = multiplayerGame.board.moves({ square: move.from as any, verbose: true });
+            const isLegalMove = legalMoves.some((legalMove: any) => 
+                legalMove.from === move.from && legalMove.to === move.to
+            );
+            
+            if (!isLegalMove) {
+                socket.send(JSON.stringify({
+                    type: ERROR,
+                    payload: { message: "Illegal move" }
+                }));
+                return;
+            }
+            
+            // Apply the move to server's game state
             multiplayerGame.board.move(move);
             multiplayerGame.moveCount++;
             
-            // Send move to opponent
+            // Send move to opponent (only after validation)
             const opponent = multiplayerGame.player1 === socket ? multiplayerGame.player2 : multiplayerGame.player1;
             opponent.send(JSON.stringify({
+                type: MOVE,
+                payload: { move }
+            }));
+            
+            // Send move back to the player who made it (for confirmation)
+            socket.send(JSON.stringify({
                 type: MOVE,
                 payload: { move }
             }));
@@ -261,6 +312,7 @@ export function handleMove(state: GameState, socket: WebSocket, move: Move): voi
                 state.games = state.games.filter(g => g !== multiplayerGame);
             }
         } catch (error) {
+            console.error("Move validation error:", error);
             socket.send(JSON.stringify({
                 type: ERROR,
                 payload: { message: "Invalid move" }
@@ -273,9 +325,30 @@ export function handleMove(state: GameState, socket: WebSocket, move: Move): voi
     const singlePlayerGame = state.singlePlayerGames.find(game => game.player === socket);
     
     if (singlePlayerGame) {
-        // Handle single player game
+        // Handle single player game with enhanced validation
         try {
+            // Validate the move is legal
+            const legalMoves = singlePlayerGame.board.moves({ square: move.from as any, verbose: true });
+            const isLegalMove = legalMoves.some((legalMove: any) => 
+                legalMove.from === move.from && legalMove.to === move.to
+            );
+            
+            if (!isLegalMove) {
+                socket.send(JSON.stringify({
+                    type: ERROR,
+                    payload: { message: "Illegal move" }
+                }));
+                return;
+            }
+            
+            // Apply the move to server's game state
             singlePlayerGame.board.move(move);
+            
+            // Send move back to the player (for confirmation)
+            socket.send(JSON.stringify({
+                type: MOVE,
+                payload: { move }
+            }));
             
             // Check for game over conditions
             const gameOverResult = checkGameOver(singlePlayerGame.board);
@@ -296,6 +369,7 @@ export function handleMove(state: GameState, socket: WebSocket, move: Move): voi
                 state.singlePlayerGames = state.singlePlayerGames.filter(g => g !== singlePlayerGame);
             }
         } catch (error) {
+            console.error("Single player move validation error:", error);
             socket.send(JSON.stringify({
                 type: ERROR,
                 payload: { message: "Invalid move" }
@@ -303,6 +377,12 @@ export function handleMove(state: GameState, socket: WebSocket, move: Move): voi
         }
         return;
     }
+    
+    // No game found
+    socket.send(JSON.stringify({
+        type: ERROR,
+        payload: { message: "No active game found" }
+    }));
 }
 
 /**
